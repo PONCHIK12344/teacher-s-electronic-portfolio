@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
     <title>Портфолио учителя начальных классов</title>
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
     <style>
         /* ---------- ОБЩИЙ СБРОС И РАДУЖНЫЙ АНИМИРОВАННЫЙ ФОН ---------- */
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -673,247 +676,23 @@
     <!-- ==================== СКРИПТЫ ==================== -->
     <script>
         // ========================================================================
-        //  1. РАБОТА С INDEXEDDB
+        //  🔥 КОНФИГУРАЦИЯ FIREBASE - ВСТАВЬТЕ СВОИ ДАННЫЕ
         // ========================================================================
-        const DB_NAME = 'PortfolioDB';
-        const DB_VERSION = 1;
-        const STORE_NAME = 'files';
-        let db = null;
+        const firebaseConfig = {
+            apiKey: "AIzaSyB...",  // <-- ВСТАВЬТЕ СВОЙ API KEY
+            authDomain: "ваш-проект.firebaseapp.com",
+            projectId: "ваш-проект",
+            storageBucket: "ваш-проект.firebasestorage.app",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:abcdef"
+        };
 
-        function openDB() {
-            return new Promise((resolve, reject) => {
-                const request = indexedDB.open(DB_NAME, DB_VERSION);
-                request.onupgradeneeded = function(e) {
-                    const db = e.target.result;
-                    if (!db.objectStoreNames.contains(STORE_NAME)) {
-                        const store = db.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
-                        store.createIndex('type', 'type', { unique: false });
-                    }
-                };
-                request.onsuccess = function(e) { db = e.target.result; resolve(db); };
-                request.onerror = function(e) { reject(e.target.error); };
-            });
-        }
-
-        function saveFileRecord(record) {
-            return new Promise((resolve, reject) => {
-                if (!db) return reject('База не открыта');
-                const tx = db.transaction(STORE_NAME, 'readwrite');
-                const store = tx.objectStore(STORE_NAME);
-                const request = store.add(record);
-                request.onsuccess = function(e) { resolve(e.target.result); };
-                request.onerror = function(e) { reject(e.target.error); };
-            });
-        }
-
-        function getFilesByType(type) {
-            return new Promise((resolve, reject) => {
-                if (!db) return reject('База не открыта');
-                const tx = db.transaction(STORE_NAME, 'readonly');
-                const store = tx.objectStore(STORE_NAME);
-                const index = store.index('type');
-                const request = index.getAll(type);
-                request.onsuccess = function(e) { resolve(e.target.result); };
-                request.onerror = function(e) { reject(e.target.error); };
-            });
-        }
-
-        function getAllFiles() {
-            return new Promise((resolve, reject) => {
-                if (!db) return reject('База не открыта');
-                const tx = db.transaction(STORE_NAME, 'readonly');
-                const store = tx.objectStore(STORE_NAME);
-                const request = store.getAll();
-                request.onsuccess = function(e) { resolve(e.target.result); };
-                request.onerror = function(e) { reject(e.target.error); };
-            });
-        }
-
-        function deleteFileRecord(id) {
-            return new Promise((resolve, reject) => {
-                if (!db) return reject('База не открыта');
-                const tx = db.transaction(STORE_NAME, 'readwrite');
-                const store = tx.objectStore(STORE_NAME);
-                const request = store.delete(id);
-                request.onsuccess = function() { resolve(); };
-                request.onerror = function(e) { reject(e.target.error); };
-            });
-        }
-
-        function clearAllFiles() {
-            return new Promise((resolve, reject) => {
-                if (!db) return reject('База не открыта');
-                const tx = db.transaction(STORE_NAME, 'readwrite');
-                const store = tx.objectStore(STORE_NAME);
-                const request = store.clear();
-                request.onsuccess = function() { resolve(); };
-                request.onerror = function(e) { reject(e.target.error); };
-            });
-        }
-
-        async function getMainPhotoRecord() {
-            const items = await getFilesByType('mainPhoto');
-            return items.length > 0 ? items[0] : null;
-        }
-
-        async function saveMainPhoto(file, title, description) {
-            const existing = await getMainPhotoRecord();
-            if (existing) await deleteFileRecord(existing.id);
-            return saveFileRecord({ type: 'mainPhoto', title, description, file, mime: file.type, date: Date.now() });
-        }
-
-        async function deleteMainPhoto() {
-            const existing = await getMainPhotoRecord();
-            if (existing) await deleteFileRecord(existing.id);
-        }
+        // Инициализация Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
 
         // ========================================================================
-        //  2. ТЕКСТЫ В localStorage (только контакты)
-        // ========================================================================
-        function getText(key) { return localStorage.getItem('portfolio_text_' + key) || ''; }
-
-        function setText(key, value) { localStorage.setItem('portfolio_text_' + key, value); }
-
-        function initTexts() {
-            if (!localStorage.getItem('portfolio_text_contacts')) {
-                setText('contacts', '📱 Телефон: +996551844896\n📧 Email: farizatshaybekova1@gmail.com\n📍 Адрес: г. Нарын, ул. Арпа, 9');
-            }
-        }
-
-        // ========================================================================
-        //  3. ЗАГРУЗКА ФОТОГРАФИЙ (поддерживает оба набора имён)
-        // ========================================================================
-        async function seedDatabase() {
-            const all = await getAllFiles();
-            if (all.length > 0) {
-                console.log('✅ База данных уже содержит записи, пропускаем seed.');
-                return;
-            }
-
-            console.log('📥 Загрузка начальных изображений из папки img...');
-            
-            // Создаём индикатор загрузки
-            const loadingDiv = document.createElement('div');
-            loadingDiv.style.cssText = `
-                position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-                background: rgba(0,0,0,0.85); color: white; padding: 30px 40px;
-                border-radius: 20px; z-index: 9999; text-align: center;
-                font-family: 'Nunito', sans-serif; font-size: 18px;
-                box-shadow: 0 0 50px rgba(0,0,0,0.5);
-                min-width: 320px; max-width: 90vw;
-            `;
-            loadingDiv.innerHTML = `
-                <div style="font-size: 40px; margin-bottom: 10px;">📸</div>
-                <div>Загрузка фотографий...</div>
-                <div style="margin-top: 10px; font-size: 14px; color: #aaa;" id="loadingProgress">0 / 58</div>
-                <div style="margin-top: 10px; height: 6px; background: #333; border-radius: 6px; overflow: hidden;">
-                    <div style="height: 100%; width: 0%; background: linear-gradient(90deg, #ff7f50, #ffb07c); border-radius: 6px; transition: width 0.3s;" id="loadingBar"></div>
-                </div>
-                <div style="margin-top: 12px; font-size: 12px; color: #888;" id="loadingStatus">Подготовка...</div>
-            `;
-            document.body.appendChild(loadingDiv);
-
-            let loaded = 0;
-            let errors = 0;
-            const total = 58;
-
-            const updateProgress = (status) => {
-                const progress = document.getElementById('loadingProgress');
-                const bar = document.getElementById('loadingBar');
-                const statusEl = document.getElementById('loadingStatus');
-                if (progress) progress.textContent = `${loaded} / ${total}`;
-                if (bar) bar.style.width = `${(loaded / total) * 100}%`;
-                if (statusEl && status) statusEl.textContent = status;
-            };
-
-            // Пробует загрузить файл. Если не найден — пробует альтернативное имя
-            const loadAndSaveWithFallback = async (type, name1, name2, title) => {
-                const names = [];
-                if (name1) names.push(name1);
-                if (name2) names.push(name2);
-                
-                let loadedOk = false;
-                for (const filename of names) {
-                    const url = `img/${filename}`;
-                    try {
-                        const response = await fetch(url);
-                        if (response.ok) {
-                            const blob = await response.blob();
-                            if (blob.size > 100) {
-                                const record = {
-                                    type: type,
-                                    title: title || filename,
-                                    description: '',
-                                    file: blob,
-                                    mime: blob.type || 'image/jpeg',
-                                    date: Date.now()
-                                };
-                                await saveFileRecord(record);
-                                loaded++;
-                                loadedOk = true;
-                                console.log(`✅ Загружено: ${filename} (${Math.round(blob.size/1024)} КБ)`);
-                                updateProgress(`✅ ${filename}`);
-                                break;
-                            }
-                        }
-                    } catch (e) {
-                        console.log(`⚠️ Не найден: ${url}`);
-                    }
-                }
-                if (!loadedOk) {
-                    errors++;
-                    console.warn(`❌ Не удалось загрузить файлы: ${names.join(' или ')}`);
-                    updateProgress(`❌ ${names.join(' / ')}`);
-                }
-            };
-
-            updateProgress('Начинаем загрузку...');
-
-            // 1. Главное фото (3 варианта)
-            await loadAndSaveWithFallback('mainPhoto', 'main.jpg', 'главное фото.jpg', 'Главное фото');
-
-            // 2. Фотографии (w1.jpg / 1w.jpg)
-            for (let i = 1; i <= 32; i++) {
-                await loadAndSaveWithFallback('photo', `w${i}.jpg`, `${i}w.jpg`, `Фото ${i}`);
-            }
-
-            // 3. Сертификаты (c1.jpg / 1c.jpg)
-            for (let i = 1; i <= 8; i++) {
-                await loadAndSaveWithFallback('certificates', `c${i}.jpg`, `${i}c.jpg`, `Сертификат ${i}`);
-            }
-
-            // 4. Резюме (f1.jpg / 1f.jpg, f3.jpg / 3f.jpg)
-            await loadAndSaveWithFallback('resumePhoto', 'f1.jpg', '1f.jpg', 'Резюме 1');
-            await loadAndSaveWithFallback('resumePhoto', 'f3.jpg', '3f.jpg', 'Резюме 3');
-
-            // 5. Награды (ya1.jpg / 1ya.jpg)
-            for (let i = 1; i <= 8; i++) {
-                await loadAndSaveWithFallback('awards', `ya${i}.jpg`, `${i}ya.jpg`, `Награда ${i}`);
-            }
-
-            // 6. Трудовая книжка (y1.jpg / 1y.jpg)
-            for (let i = 1; i <= 7; i++) {
-                await loadAndSaveWithFallback('workbook', `y${i}.jpg`, `${i}y.jpg`, `Трудовая книжка ${i}`);
-            }
-
-            // Удаляем индикатор загрузки
-            loadingDiv.remove();
-
-            console.log(`✅ Загрузка завершена! Загружено: ${loaded}, ошибок: ${errors}`);
-            
-            if (errors > 0) {
-                console.log('📋 Проверьте имена файлов в папке img:');
-                console.log('📌 main.jpg ИЛИ главное фото.jpg');
-                console.log('📌 w1.jpg...w32.jpg ИЛИ 1w.jpg...32w.jpg');
-                console.log('📌 c1.jpg...c8.jpg ИЛИ 1c.jpg...8c.jpg');
-                console.log('📌 f1.jpg, f3.jpg ИЛИ 1f.jpg, 3f.jpg');
-                console.log('📌 ya1.jpg...ya8.jpg ИЛИ 1ya.jpg...8ya.jpg');
-                console.log('📌 y1.jpg...y7.jpg ИЛИ 1y.jpg...7y.jpg');
-            }
-        }
-
-        // ========================================================================
-        //  4. ПРИЛОЖЕНИЕ
+        //  2. ПРИЛОЖЕНИЕ
         // ========================================================================
         let isLogged = false;
         const PASSWORD = 'Gulnazka';
@@ -923,6 +702,19 @@
         let currentCertificateIndex = 0;
         let currentAwardIndex = 0;
         let currentVideoIndex = 0;
+
+        // Кэш данных из Firebase
+        let cache = {
+            mainPhoto: null,
+            photo: [],
+            resumePhoto: [],
+            workbook: [],
+            certificates: [],
+            awards: [],
+            videos: [],
+            materials: [],
+            contacts: '📱 Телефон: +996551844896\n📧 Email: 1@gmail.com\n📍 Адрес: г. Нарын, ул. Ленина, 15'
+        };
 
         const contentArea = document.getElementById('contentArea');
         const authStatus = document.getElementById('authStatus');
@@ -964,6 +756,187 @@
             return 'file';
         }
 
+        // ------ Работа с Firebase ------
+        async function loadFromFirebase() {
+            try {
+                console.log('📥 Загрузка данных из Firebase...');
+                const snapshot = await db.collection('portfolio').doc('data').get();
+                if (snapshot.exists) {
+                    const data = snapshot.data();
+                    cache = data;
+                    console.log('✅ Данные загружены из Firebase');
+                } else {
+                    console.log('ℹ️ Данных в Firebase нет, создаём начальные...');
+                    await seedFirebase();
+                }
+            } catch (e) {
+                console.error('❌ Ошибка загрузки из Firebase:', e);
+                alert('Ошибка подключения к Firebase: ' + e.message);
+            }
+        }
+
+        async function saveToFirebase() {
+            try {
+                await db.collection('portfolio').doc('data').set(cache);
+                console.log('✅ Данные сохранены в Firebase');
+            } catch (e) {
+                console.error('❌ Ошибка сохранения в Firebase:', e);
+                alert('Ошибка сохранения: ' + e.message);
+            }
+        }
+
+        // ------ Начальные данные для Firebase (seed) ------
+        async function seedFirebase() {
+            // Создаём начальные данные
+            const initialData = {
+                mainPhoto: null,
+                photo: [],
+                resumePhoto: [],
+                workbook: [],
+                certificates: [],
+                awards: [],
+                videos: [],
+                materials: [],
+                contacts: '📱 Телефон: +996551844896\n📧 Email: farizatshaybekova1@gmail.com\n📍 Адрес: г. Нарын, ул. Арпа, 9'
+            };
+            cache = initialData;
+            await saveToFirebase();
+            console.log('✅ Начальные данные созданы в Firebase');
+        }
+
+        // ------ Загрузка файлов из папки img (только при первом запуске) ------
+        async function loadImagesFromImgFolder() {
+            // Проверяем, есть ли уже фото в Firebase
+            if (cache.photo && cache.photo.length > 0) {
+                console.log('ℹ️ Фото уже есть в Firebase, пропускаем загрузку из img');
+                return;
+            }
+
+            console.log('📥 Загрузка изображений из папки img...');
+            
+            const loadAndSave = async (type, filename, title) => {
+                const url = `img/${filename}`;
+                try {
+                    const response = await fetch(url);
+                    if (!response.ok) {
+                        console.warn(`⚠️ Файл не найден: ${url}`);
+                        return;
+                    }
+                    const blob = await response.blob();
+                    if (blob.size < 100) {
+                        console.warn(`⚠️ Файл слишком маленький: ${url}`);
+                        return;
+                    }
+                    // Преобразуем blob в base64 для хранения в Firestore
+                    const reader = new FileReader();
+                    const base64 = await new Promise((resolve) => {
+                        reader.onload = () => resolve(reader.result);
+                        reader.readAsDataURL(blob);
+                    });
+                    
+                    const record = {
+                        title: title || filename,
+                        description: '',
+                        file: base64,
+                        mime: blob.type || 'image/jpeg',
+                        date: Date.now()
+                    };
+                    
+                    if (!cache[type]) cache[type] = [];
+                    cache[type].push(record);
+                    console.log(`✅ Загружено: ${filename}`);
+                } catch (e) {
+                    console.warn(`⚠️ Ошибка загрузки ${filename}:`, e);
+                }
+            };
+
+            // 1. Главное фото (пробуем оба варианта)
+            try {
+                const resp1 = await fetch('img/main.jpg');
+                if (resp1.ok) {
+                    const blob = await resp1.blob();
+                    const reader = new FileReader();
+                    const base64 = await new Promise((resolve) => {
+                        reader.onload = () => resolve(reader.result);
+                        reader.readAsDataURL(blob);
+                    });
+                    cache.mainPhoto = {
+                        title: 'Главное фото',
+                        description: '',
+                        file: base64,
+                        mime: blob.type || 'image/jpeg',
+                        date: Date.now()
+                    };
+                    console.log('✅ Загружено: main.jpg');
+                } else {
+                    const resp2 = await fetch('img/главное фото.jpg');
+                    if (resp2.ok) {
+                        const blob = await resp2.blob();
+                        const reader = new FileReader();
+                        const base64 = await new Promise((resolve) => {
+                            reader.onload = () => resolve(reader.result);
+                            reader.readAsDataURL(blob);
+                        });
+                        cache.mainPhoto = {
+                            title: 'Главное фото',
+                            description: '',
+                            file: base64,
+                            mime: blob.type || 'image/jpeg',
+                            date: Date.now()
+                        };
+                        console.log('✅ Загружено: главное фото.jpg');
+                    }
+                }
+            } catch (e) {}
+
+            // 2. Фотографии (w1.jpg / 1w.jpg)
+            for (let i = 1; i <= 32; i++) {
+                await loadAndSave('photo', `w${i}.jpg`, `Фото ${i}`);
+                // если не загрузилось, пробуем старый формат
+                if (!cache.photo || cache.photo.length < i) {
+                    await loadAndSave('photo', `${i}w.jpg`, `Фото ${i}`);
+                }
+            }
+
+            // 3. Сертификаты
+            for (let i = 1; i <= 8; i++) {
+                await loadAndSave('certificates', `c${i}.jpg`, `Сертификат ${i}`);
+                if (!cache.certificates || cache.certificates.length < i) {
+                    await loadAndSave('certificates', `${i}c.jpg`, `Сертификат ${i}`);
+                }
+            }
+
+            // 4. Резюме
+            await loadAndSave('resumePhoto', 'f1.jpg', 'Резюме 1');
+            if (!cache.resumePhoto || cache.resumePhoto.length < 1) {
+                await loadAndSave('resumePhoto', '1f.jpg', 'Резюме 1');
+            }
+            await loadAndSave('resumePhoto', 'f3.jpg', 'Резюме 3');
+            if (!cache.resumePhoto || cache.resumePhoto.length < 2) {
+                await loadAndSave('resumePhoto', '3f.jpg', 'Резюме 3');
+            }
+
+            // 5. Награды
+            for (let i = 1; i <= 8; i++) {
+                await loadAndSave('awards', `ya${i}.jpg`, `Награда ${i}`);
+                if (!cache.awards || cache.awards.length < i) {
+                    await loadAndSave('awards', `${i}ya.jpg`, `Награда ${i}`);
+                }
+            }
+
+            // 6. Трудовая книжка
+            for (let i = 1; i <= 7; i++) {
+                await loadAndSave('workbook', `y${i}.jpg`, `Трудовая книжка ${i}`);
+                if (!cache.workbook || cache.workbook.length < i) {
+                    await loadAndSave('workbook', `${i}y.jpg`, `Трудовая книжка ${i}`);
+                }
+            }
+
+            // Сохраняем всё в Firebase
+            await saveToFirebase();
+            console.log('✅ Загрузка из img завершена, данные сохранены в Firebase');
+        }
+
         // ------ Рендеринг страниц (асинхронный) ------
         async function renderPage(pageId) {
             contentArea.innerHTML = '';
@@ -971,15 +944,15 @@
             container.className = 'page active';
 
             switch (pageId) {
-                case 'home': await renderHome(container); break;
-                case 'resume': await renderCarousel(container, 'resumePhoto', currentResumeIndex, 'resume', 'large-carousel', 'Резюме (фотографии)'); break;
-                case 'workbook': await renderCarousel(container, 'workbook', currentWorkbookIndex, 'workbook', 'large-carousel', 'Трудовая книжка'); break;
+                case 'home': renderHome(container); break;
+                case 'resume': renderCarousel(container, 'resumePhoto', currentResumeIndex, 'resume', 'large-carousel', 'Резюме (фотографии)'); break;
+                case 'workbook': renderCarousel(container, 'workbook', currentWorkbookIndex, 'workbook', 'large-carousel', 'Трудовая книжка'); break;
                 case 'contacts': renderTextPage(container, 'Контакты', 'contacts', 'Контактная информация'); break;
-                case 'certificates': await renderCarousel(container, 'certificates', currentCertificateIndex, 'certificates', 'large-carousel', 'Сертификаты'); break;
-                case 'awards': await renderCarousel(container, 'awards', currentAwardIndex, 'awards', 'large-carousel', 'Награды'); break;
-                case 'videos': await renderCarousel(container, 'videos', currentVideoIndex, 'videos', 'large-carousel', 'Видеоуроки', 'video/*'); break;
-                case 'materials': await renderMediaPage(container, 'Методические материалы', 'materials', 'Добавить материал', '.pdf,.doc,.docx,.ppt,.pptx,.txt,image/*'); break;
-                case 'photos': await renderCarousel(container, 'photo', currentPhotoIndex, 'photos', '', 'Фотографии'); break;
+                case 'certificates': renderCarousel(container, 'certificates', currentCertificateIndex, 'certificates', 'large-carousel', 'Сертификаты'); break;
+                case 'awards': renderCarousel(container, 'awards', currentAwardIndex, 'awards', 'large-carousel', 'Награды'); break;
+                case 'videos': renderCarousel(container, 'videos', currentVideoIndex, 'videos', 'large-carousel', 'Видеоуроки', 'video/*'); break;
+                case 'materials': renderMediaPage(container, 'Методические материалы', 'materials', 'Добавить материал', '.pdf,.doc,.docx,.ppt,.pptx,.txt,image/*'); break;
+                case 'photos': renderCarousel(container, 'photo', currentPhotoIndex, 'photos', '', 'Фотографии'); break;
                 default: container.innerHTML = '<p>Страница не найдена.</p>';
             }
 
@@ -1004,7 +977,7 @@
         }
 
         // ------ Главная ------
-        async function renderHome(container) {
+        function renderHome(container) {
             const fullText = `Я выбрала профессию учителя начальных классов сердцем. Ещё с первых лет своей педагогической деятельности я поняла, что работа с детьми — это не просто профессия, а моё призвание.
 
 С 2008 года я связана со школой и каждый год всё больше убеждаюсь в том, насколько важен труд учителя начальных классов. Именно мы встречаем ребёнка на пороге его школьной жизни, помогаем ему сделать первые шаги в мире знаний, учим не только читать, писать и считать, но и дружить, уважать других, быть самостоятельным и верить в себя.
@@ -1021,11 +994,9 @@
 
 Учитель начальных классов — это профессия, в которой знания передаются не только через книги, но и через сердце. Именно поэтому я выбрала её и продолжаю любить её каждый день.`;
 
-            const mainPhotoRecord = await getMainPhotoRecord();
             let photoHtml = '';
-            if (mainPhotoRecord) {
-                const url = createObjectURL(mainPhotoRecord.file);
-                photoHtml = `<img src="${url}" alt="Главное фото">`;
+            if (cache.mainPhoto && cache.mainPhoto.file) {
+                photoHtml = `<img src="${cache.mainPhoto.file}" alt="Главное фото">`;
             } else {
                 photoHtml = `<div class="main-photo-placeholder"><span class="icon">🖼️</span><span>Загрузите фото</span></div>`;
             }
@@ -1036,7 +1007,7 @@
                     <div style="margin-top:12px;">
                         <input type="file" id="mainPhotoInput" accept="image/*" style="display:none;" onchange="uploadMainPhoto(event)">
                         <button class="add-btn" onclick="document.getElementById('mainPhotoInput').click()">📷 Загрузить фото</button>
-                        ${mainPhotoRecord ? `<button class="btn btn-secondary" onclick="removeMainPhoto()" style="margin-left:10px;">🗑️ Удалить</button>` : ''}
+                        ${cache.mainPhoto ? `<button class="btn btn-secondary" onclick="removeMainPhoto()" style="margin-left:10px;">🗑️ Удалить</button>` : ''}
                     </div>
                 `;
             }
@@ -1059,7 +1030,19 @@
             const file = event.target.files[0];
             if (!file) return;
             try {
-                await saveMainPhoto(file, 'Главное фото', '');
+                const reader = new FileReader();
+                const base64 = await new Promise((resolve) => {
+                    reader.onload = () => resolve(reader.result);
+                    reader.readAsDataURL(file);
+                });
+                cache.mainPhoto = {
+                    title: 'Главное фото',
+                    description: '',
+                    file: base64,
+                    mime: file.type,
+                    date: Date.now()
+                };
+                await saveToFirebase();
                 await renderPage('home');
             } catch (e) { alert('Ошибка: ' + e.message); }
         };
@@ -1067,14 +1050,15 @@
         window.removeMainPhoto = async function() {
             if (!confirm('Удалить главное фото?')) return;
             try {
-                await deleteMainPhoto();
+                cache.mainPhoto = null;
+                await saveToFirebase();
                 await renderPage('home');
             } catch (e) { alert('Ошибка: ' + e.message); }
         };
 
-        // ------ Текстовая страница (только для контактов) ------
+        // ------ Текстовая страница (для контактов) ------
         function renderTextPage(container, title, key, placeholder) {
-            const content = getText(key);
+            const content = cache.contacts || 'Нет данных.';
             const editable = isLogged;
             container.innerHTML = `
                 <h1 class="page-title">${title}</h1>
@@ -1083,37 +1067,37 @@
                     ${editable ? `
                         <textarea class="edit-area" id="textEdit_${key}" placeholder="${placeholder}">${content}</textarea>
                         <div style="margin-top:12px;"><button class="btn btn-primary" onclick="saveText('${key}')">Сохранить</button></div>
-                    ` : `<p>${content || 'Нет данных.'}</p>`}
+                    ` : `<p>${content}</p>`}
                 </div>
             `;
         }
 
-        window.saveText = function(key) {
+        window.saveText = async function(key) {
             const ta = document.getElementById(`textEdit_${key}`);
             if (!ta) return;
-            setText(key, ta.value);
+            cache.contacts = ta.value;
+            await saveToFirebase();
             alert('Сохранено!');
             renderPage(key);
         };
 
         // ------ Медиа-страницы (сетка) для методических материалов ------
-        async function renderMediaPage(container, title, type, addLabel, acceptTypes) {
-            const records = await getFilesByType(type);
+        function renderMediaPage(container, title, type, addLabel, acceptTypes) {
+            const records = cache[type] || [];
             const editable = isLogged;
 
             let html = `<h1 class="page-title">${title}</h1><div class="page-sub">Всего: ${records.length}</div><div class="card-grid">`;
             if (records.length === 0) {
                 html += `<p style="color:#998070; grid-column:1/-1; padding:10px 0; font-weight:600;">Пока ничего нет. Добавьте элемент.</p>`;
             } else {
-                for (const rec of records) {
+                for (let idx = 0; idx < records.length; idx++) {
+                    const rec = records[idx];
                     const ft = getFileType(rec.mime);
                     let mediaHtml = '';
                     if (ft === 'image') {
-                        const url = createObjectURL(rec.file);
-                        mediaHtml = `<img src="${url}" alt="${rec.title}" loading="lazy">`;
+                        mediaHtml = `<img src="${rec.file}" alt="${rec.title}" loading="lazy">`;
                     } else if (ft === 'video') {
-                        const url = createObjectURL(rec.file);
-                        mediaHtml = `<video controls preload="metadata"><source src="${url}" type="${rec.mime}"></video>`;
+                        mediaHtml = `<video controls preload="metadata"><source src="${rec.file}" type="${rec.mime}"></video>`;
                     } else {
                         mediaHtml = `<div class="file-icon">📄</div>`;
                     }
@@ -1124,7 +1108,7 @@
                             <p>${rec.description || ''}</p>
                             <div class="meta">
                                 <span>${rec.date ? formatDate(rec.date) : ''}</span>
-                                ${editable ? `<button class="delete-btn" onclick="deleteMediaItem('${type}', ${rec.id})">✕</button>` : ''}
+                                ${editable ? `<button class="delete-btn" onclick="deleteMediaItem('${type}', ${idx})">✕</button>` : ''}
                             </div>
                         </div>
                     `;
@@ -1152,9 +1136,9 @@
             container.innerHTML = html;
         }
 
-        // ------ Универсальная карусель (для фото, резюме, трудовой книжки, сертификатов, наград, видео) ------
-        async function renderCarousel(container, type, index, pageId, extraClass, customTitle, acceptType) {
-            const records = await getFilesByType(type);
+        // ------ Универсальная карусель ------
+        function renderCarousel(container, type, index, pageId, extraClass, customTitle, acceptType) {
+            const records = cache[type] || [];
             const total = records.length;
             const editable = isLogged;
 
@@ -1166,13 +1150,12 @@
                 slideHtml = `<div class="carousel-slide"><div class="empty-msg">Нет загруженных элементов</div></div>`;
             } else {
                 const item = records[index];
-                const url = createObjectURL(item.file);
                 const ft = getFileType(item.mime);
                 let mediaHtml = '';
                 if (ft === 'image') {
-                    mediaHtml = `<img src="${url}" alt="${item.title || 'Изображение'}" loading="lazy">`;
+                    mediaHtml = `<img src="${item.file}" alt="${item.title || 'Изображение'}" loading="lazy">`;
                 } else if (ft === 'video') {
-                    mediaHtml = `<video controls preload="metadata"><source src="${url}" type="${item.mime}"></video>`;
+                    mediaHtml = `<video controls preload="metadata"><source src="${item.file}" type="${item.mime}"></video>`;
                 } else {
                     mediaHtml = `<div class="file-icon" style="font-size:80px; color:#ff7f50;">📄</div>`;
                 }
@@ -1196,10 +1179,9 @@
                 `;
 
                 if (editable) {
-                    const currentId = records[index].id;
                     controlsHtml += `
                         <div style="text-align:center; margin-top:8px;">
-                            <button class="carousel-delete-btn" onclick="deleteCurrentCarouselItem('${type}', ${currentId}, '${pageId}')">✕ Удалить</button>
+                            <button class="carousel-delete-btn" onclick="deleteCurrentCarouselItem('${type}', ${index}, '${pageId}')">✕ Удалить</button>
                         </div>
                     `;
                 }
@@ -1251,88 +1233,87 @@
 
         // Функции управления каруселью (глобальные)
         window.changeCarousel = function(type, delta, pageId) {
-            getFilesByType(type).then(records => {
-                const total = records.length;
-                if (total === 0) return;
-                let idx = 0;
-                if (type === 'resumePhoto') {
-                    idx = (currentResumeIndex + delta + total) % total;
-                    currentResumeIndex = idx;
-                    renderPage('resume');
-                } else if (type === 'workbook') {
-                    idx = (currentWorkbookIndex + delta + total) % total;
-                    currentWorkbookIndex = idx;
-                    renderPage('workbook');
-                } else if (type === 'photo') {
-                    idx = (currentPhotoIndex + delta + total) % total;
-                    currentPhotoIndex = idx;
-                    renderPage('photos');
-                } else if (type === 'certificates') {
-                    idx = (currentCertificateIndex + delta + total) % total;
-                    currentCertificateIndex = idx;
-                    renderPage('certificates');
-                } else if (type === 'awards') {
-                    idx = (currentAwardIndex + delta + total) % total;
-                    currentAwardIndex = idx;
-                    renderPage('awards');
-                } else if (type === 'videos') {
-                    idx = (currentVideoIndex + delta + total) % total;
-                    currentVideoIndex = idx;
-                    renderPage('videos');
-                }
-            });
+            const records = cache[type] || [];
+            const total = records.length;
+            if (total === 0) return;
+            let idx = 0;
+            if (type === 'resumePhoto') {
+                idx = (currentResumeIndex + delta + total) % total;
+                currentResumeIndex = idx;
+                renderPage('resume');
+            } else if (type === 'workbook') {
+                idx = (currentWorkbookIndex + delta + total) % total;
+                currentWorkbookIndex = idx;
+                renderPage('workbook');
+            } else if (type === 'photo') {
+                idx = (currentPhotoIndex + delta + total) % total;
+                currentPhotoIndex = idx;
+                renderPage('photos');
+            } else if (type === 'certificates') {
+                idx = (currentCertificateIndex + delta + total) % total;
+                currentCertificateIndex = idx;
+                renderPage('certificates');
+            } else if (type === 'awards') {
+                idx = (currentAwardIndex + delta + total) % total;
+                currentAwardIndex = idx;
+                renderPage('awards');
+            } else if (type === 'videos') {
+                idx = (currentVideoIndex + delta + total) % total;
+                currentVideoIndex = idx;
+                renderPage('videos');
+            }
         };
 
         window.goToCarousel = function(type, index, pageId) {
-            getFilesByType(type).then(records => {
-                if (index < 0 || index >= records.length) return;
-                if (type === 'resumePhoto') {
-                    currentResumeIndex = index;
-                    renderPage('resume');
-                } else if (type === 'workbook') {
-                    currentWorkbookIndex = index;
-                    renderPage('workbook');
-                } else if (type === 'photo') {
-                    currentPhotoIndex = index;
-                    renderPage('photos');
-                } else if (type === 'certificates') {
-                    currentCertificateIndex = index;
-                    renderPage('certificates');
-                } else if (type === 'awards') {
-                    currentAwardIndex = index;
-                    renderPage('awards');
-                } else if (type === 'videos') {
-                    currentVideoIndex = index;
-                    renderPage('videos');
-                }
-            });
+            const records = cache[type] || [];
+            if (index < 0 || index >= records.length) return;
+            if (type === 'resumePhoto') {
+                currentResumeIndex = index;
+                renderPage('resume');
+            } else if (type === 'workbook') {
+                currentWorkbookIndex = index;
+                renderPage('workbook');
+            } else if (type === 'photo') {
+                currentPhotoIndex = index;
+                renderPage('photos');
+            } else if (type === 'certificates') {
+                currentCertificateIndex = index;
+                renderPage('certificates');
+            } else if (type === 'awards') {
+                currentAwardIndex = index;
+                renderPage('awards');
+            } else if (type === 'videos') {
+                currentVideoIndex = index;
+                renderPage('videos');
+            }
         };
 
         // Функция удаления текущего элемента в карусели
-        window.deleteCurrentCarouselItem = async function(type, id, pageId) {
+        window.deleteCurrentCarouselItem = async function(type, index, pageId) {
             if (!confirm('Удалить этот элемент?')) return;
             try {
-                await deleteFileRecord(id);
-                const records = await getFilesByType(type);
-                const total = records.length;
+                const records = cache[type] || [];
+                records.splice(index, 1);
+                cache[type] = records;
+                await saveToFirebase();
                 if (type === 'resumePhoto') {
-                    if (currentResumeIndex >= total) currentResumeIndex = Math.max(0, total - 1);
-                    await renderPage('resume');
+                    if (currentResumeIndex >= records.length) currentResumeIndex = Math.max(0, records.length - 1);
+                    renderPage('resume');
                 } else if (type === 'workbook') {
-                    if (currentWorkbookIndex >= total) currentWorkbookIndex = Math.max(0, total - 1);
-                    await renderPage('workbook');
+                    if (currentWorkbookIndex >= records.length) currentWorkbookIndex = Math.max(0, records.length - 1);
+                    renderPage('workbook');
                 } else if (type === 'photo') {
-                    if (currentPhotoIndex >= total) currentPhotoIndex = Math.max(0, total - 1);
-                    await renderPage('photos');
+                    if (currentPhotoIndex >= records.length) currentPhotoIndex = Math.max(0, records.length - 1);
+                    renderPage('photos');
                 } else if (type === 'certificates') {
-                    if (currentCertificateIndex >= total) currentCertificateIndex = Math.max(0, total - 1);
-                    await renderPage('certificates');
+                    if (currentCertificateIndex >= records.length) currentCertificateIndex = Math.max(0, records.length - 1);
+                    renderPage('certificates');
                 } else if (type === 'awards') {
-                    if (currentAwardIndex >= total) currentAwardIndex = Math.max(0, total - 1);
-                    await renderPage('awards');
+                    if (currentAwardIndex >= records.length) currentAwardIndex = Math.max(0, records.length - 1);
+                    renderPage('awards');
                 } else if (type === 'videos') {
-                    if (currentVideoIndex >= total) currentVideoIndex = Math.max(0, total - 1);
-                    await renderPage('videos');
+                    if (currentVideoIndex >= records.length) currentVideoIndex = Math.max(0, records.length - 1);
+                    renderPage('videos');
                 }
             } catch (e) {
                 alert('Ошибка удаления: ' + e.message);
@@ -1349,64 +1330,74 @@
             const file = fileInput.files[0];
             if (!file) { alert('Выберите файл!'); return; }
             try {
-                await saveFileRecord({ type, title, description: desc, file, mime: file.type, date: Date.now() });
+                const reader = new FileReader();
+                const base64 = await new Promise((resolve) => {
+                    reader.onload = () => resolve(reader.result);
+                    reader.readAsDataURL(file);
+                });
+                const record = {
+                    title: title,
+                    description: desc,
+                    file: base64,
+                    mime: file.type,
+                    date: Date.now()
+                };
+                if (!cache[type]) cache[type] = [];
+                cache[type].push(record);
+                await saveToFirebase();
                 titleInput.value = ''; descInput.value = ''; fileInput.value = '';
                 toggleForm(type);
-                const records = await getFilesByType(type);
                 if (type === 'resumePhoto') {
-                    currentResumeIndex = records.length - 1;
-                    await renderPage('resume');
+                    currentResumeIndex = cache.resumePhoto.length - 1;
+                    renderPage('resume');
                 } else if (type === 'workbook') {
-                    currentWorkbookIndex = records.length - 1;
-                    await renderPage('workbook');
+                    currentWorkbookIndex = cache.workbook.length - 1;
+                    renderPage('workbook');
                 } else if (type === 'photo') {
-                    currentPhotoIndex = records.length - 1;
-                    await renderPage('photos');
+                    currentPhotoIndex = cache.photo.length - 1;
+                    renderPage('photos');
                 } else if (type === 'certificates') {
-                    currentCertificateIndex = records.length - 1;
-                    await renderPage('certificates');
+                    currentCertificateIndex = cache.certificates.length - 1;
+                    renderPage('certificates');
                 } else if (type === 'awards') {
-                    currentAwardIndex = records.length - 1;
-                    await renderPage('awards');
+                    currentAwardIndex = cache.awards.length - 1;
+                    renderPage('awards');
                 } else if (type === 'videos') {
-                    currentVideoIndex = records.length - 1;
-                    await renderPage('videos');
+                    currentVideoIndex = cache.videos.length - 1;
+                    renderPage('videos');
                 } else {
-                    await renderPage(type);
+                    renderPage(type);
                 }
             } catch (e) { alert('Ошибка: ' + e.message); }
         };
 
-        window.deleteMediaItem = async function(type, id) {
+        window.deleteMediaItem = async function(type, idx) {
             if (!confirm('Удалить этот элемент?')) return;
             try {
-                await deleteFileRecord(id);
+                const records = cache[type] || [];
+                records.splice(idx, 1);
+                cache[type] = records;
+                await saveToFirebase();
                 if (type === 'resumePhoto') {
-                    const records = await getFilesByType('resumePhoto');
                     if (currentResumeIndex >= records.length) currentResumeIndex = Math.max(0, records.length - 1);
-                    await renderPage('resume');
+                    renderPage('resume');
                 } else if (type === 'workbook') {
-                    const records = await getFilesByType('workbook');
                     if (currentWorkbookIndex >= records.length) currentWorkbookIndex = Math.max(0, records.length - 1);
-                    await renderPage('workbook');
+                    renderPage('workbook');
                 } else if (type === 'photo') {
-                    const records = await getFilesByType('photo');
                     if (currentPhotoIndex >= records.length) currentPhotoIndex = Math.max(0, records.length - 1);
-                    await renderPage('photos');
+                    renderPage('photos');
                 } else if (type === 'certificates') {
-                    const records = await getFilesByType('certificates');
                     if (currentCertificateIndex >= records.length) currentCertificateIndex = Math.max(0, records.length - 1);
-                    await renderPage('certificates');
+                    renderPage('certificates');
                 } else if (type === 'awards') {
-                    const records = await getFilesByType('awards');
                     if (currentAwardIndex >= records.length) currentAwardIndex = Math.max(0, records.length - 1);
-                    await renderPage('awards');
+                    renderPage('awards');
                 } else if (type === 'videos') {
-                    const records = await getFilesByType('videos');
                     if (currentVideoIndex >= records.length) currentVideoIndex = Math.max(0, records.length - 1);
-                    await renderPage('videos');
+                    renderPage('videos');
                 } else {
-                    await renderPage(type);
+                    renderPage(type);
                 }
             } catch (e) { alert('Ошибка: ' + e.message); }
         };
@@ -1462,10 +1453,17 @@
         // ========================================================================
         async function init() {
             try {
-                await openDB();
-                initTexts();
-                await seedDatabase();
+                // Загружаем данные из Firebase
+                await loadFromFirebase();
+                
+                // Если данных в Firebase нет или они пустые - загружаем из папки img
+                const hasData = cache.photo && cache.photo.length > 0;
+                if (!hasData) {
+                    await loadImagesFromImgFolder();
+                }
+                
                 await renderPage('home');
+                console.log('✅ Портфолио успешно загружено!');
             } catch (e) {
                 alert('Ошибка инициализации: ' + e.message);
             }
